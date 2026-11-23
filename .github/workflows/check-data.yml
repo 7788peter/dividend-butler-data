@@ -1,0 +1,69 @@
+name: check-data-freshness
+
+# 每天台灣時間 07:30（UTC 23:30）檢查公開的 app-data.json 是不是當天更新的。
+# 沒更新、檔案壞掉或證券數量不足時，這個工作會失敗，GitHub 會寄信通知建立者。
+on:
+  schedule:
+    - cron: "30 23 * * *"
+  workflow_dispatch:
+    inputs:
+      simulate_stale:
+        description: "測試用：假裝已經過了三天，應該會失敗並寄信"
+        type: boolean
+        default: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the public data file
+        run: |
+          curl -fsSL --retry 3 --retry-delay 20 -o app-data.json "https://7788peter.github.io/dividend-butler-data/app-data.json?ts=$(date +%s)"
+          ls -l app-data.json
+
+      - name: Check freshness
+        env:
+          SIMULATE_STALE: ${{ inputs.simulate_stale }}
+        run: |
+          python3 - <<'PY'
+          import datetime, json, os, sys
+
+          tz = datetime.timezone(datetime.timedelta(hours=8))  # 台灣時間
+          now = datetime.datetime.now(tz)
+          if os.environ.get("SIMULATE_STALE") == "true":
+              now += datetime.timedelta(days=3)
+          today = now.date()
+
+          try:
+              with open("app-data.json", encoding="utf-8") as f:
+                  d = json.load(f)
+              meta, secs = d["meta"], d["securities"]
+              exported = datetime.datetime.fromisoformat(meta["exportedAt"])
+          except Exception as e:
+              print("::error::app-data.json cannot be read: %s: %s" % (type(e).__name__, e))
+              sys.exit(1)
+
+          problems = []
+          if exported.date() != today:
+              problems.append("exportedAt is %s but today (Taiwan time) is %s" % (meta["exportedAt"], today))
+          if len(secs) < 1000:
+              problems.append("only %d securities, expected at least 1000" % len(secs))
+
+          def last_weekday_before(day):
+              day -= datetime.timedelta(days=1)
+              while day.weekday() >= 5:
+                  day -= datetime.timedelta(days=1)
+              return day
+
+          expected = last_weekday_before(today).isoformat()
+          stale = [k for k in ("TWSE", "TPEX") if str(meta.get("priceDates", {}).get(k, "")) < expected]
+          print("exportedAt:", meta["exportedAt"], "| securities:", len(secs), "| priceDates:", meta.get("priceDates"))
+          if stale:
+              # 休市日（例如春節）收盤價日期本來就不會更新，所以這裡只警告、不讓工作失敗
+              print("::warning::price dates older than the last weekday (%s): %s" % (expected, ", ".join(stale)))
+          if problems:
+              for p in problems:
+                  print("::error::" + p)
+              sys.exit(1)
+          print("OK: data was updated today.")
+          PY

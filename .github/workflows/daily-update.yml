@@ -1,0 +1,68 @@
+name: daily-update
+
+# 雲端預演：在 GitHub 的伺服器上跑 pipeline.py，把結果的摘要印出來，供跟電腦端的資料比對。
+# 預設只收集、不上傳。要上傳必須手動勾選 publish，而且要先在 Secrets 放 DBUTLER_TOKEN。
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "要不要把結果上傳到公開的 app-data.json（預演時不要勾）"
+        type: boolean
+        default: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore database cache
+        uses: actions/cache@v4
+        with:
+          path: pipeline/dividend.db
+          key: db-${{ github.run_id }}
+          restore-keys: db-
+
+      - name: Collect and export
+        working-directory: pipeline
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python pipeline.py --export "$RUNNER_TEMP/app-data.json"
+
+      - name: Summary of the exported file
+        run: |
+          python3 - <<'PY'
+          import json, os
+          d = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "app-data.json"), encoding="utf-8"))
+          m, s = d["meta"], d["securities"]
+          tw = [x for x in s if x["market"] == "TWSE"]
+          ot = [x for x in s if x["market"] == "TPEX"]
+          nm = [x for x in s if not x["market"]]
+          def cnt(lst, key):
+              return sum(1 for x in lst if (x[key] if key == "meeting" else len(x[key])))
+          print("exportedAt:", m["exportedAt"], "| priceDates:", m["priceDates"])
+          print("securities:", len(s), "| TWSE:", len(tw), "| TPEX:", len(ot), "| no market:", len(nm))
+          for label, lst in (("TWSE", tw), ("TPEX", ot)):
+              print(label, "with meeting:", cnt(lst, "meeting"), "| with dividends:", cnt(lst, "dividends"), "| with exdiv:", cnt(lst, "exdiv"))
+          print("file size (bytes):", os.path.getsize(os.path.join(os.environ["RUNNER_TEMP"], "app-data.json")))
+          print("attribution has 8 datasets:", m["attribution"].count("OpenAPI") + m["attribution"].count("資料集 58285") == 8)
+          PY
+
+      - name: Keep the file for comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-data-cloud
+          path: ${{ runner.temp }}/app-data.json
+          retention-days: 3
+
+      - name: Publish
+        if: ${{ inputs.publish }}
+        working-directory: pipeline
+        env:
+          DBUTLER_TOKEN: ${{ secrets.DBUTLER_TOKEN }}
+        run: python publish.py "$RUNNER_TEMP/app-data.json"

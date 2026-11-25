@@ -14,6 +14,8 @@ jobs:
   update:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      TZ: Asia/Taipei   # 讓 pipeline.py 的匯出時間是台灣時間（GitHub 的伺服器預設是 UTC）
     steps:
       - uses: actions/checkout@v4
 
@@ -37,7 +39,7 @@ jobs:
       - name: Summary of the exported file
         run: |
           python3 - <<'PY'
-          import json, os
+          import json, os, time
           d = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "app-data.json"), encoding="utf-8"))
           m, s = d["meta"], d["securities"]
           tw = [x for x in s if x["market"] == "TWSE"]
@@ -45,6 +47,7 @@ jobs:
           nm = [x for x in s if not x["market"]]
           def cnt(lst, key):
               return sum(1 for x in lst if (x[key] if key == "meeting" else len(x[key])))
+          print("runner local time:", time.strftime("%Y-%m-%d %H:%M:%S %Z"))
           print("exportedAt:", m["exportedAt"], "| priceDates:", m["priceDates"])
           print("securities:", len(s), "| TWSE:", len(tw), "| TPEX:", len(ot), "| no market:", len(nm))
           for label, lst in (("TWSE", tw), ("TPEX", ot)):

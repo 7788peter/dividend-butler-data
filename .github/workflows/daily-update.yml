@@ -2,7 +2,10 @@ name: daily-update
 
 # 雲端預演：在 GitHub 的伺服器上跑 pipeline.py，把結果的摘要印出來，供跟電腦端的資料比對。
 # 預設只收集、不上傳。要上傳必須手動勾選 publish，而且要先在 Secrets 放 DBUTLER_TOKEN。
+# 排程：每天台灣時間 07:15（UTC 23:15）自動預演一次，用來觀察櫃買中心會不會擋 GitHub 的機房。
 on:
+  schedule:
+    - cron: "15 23 * * *"
   workflow_dispatch:
     inputs:
       publish:
